@@ -1,21 +1,23 @@
-
-import typer
-from ai.router import detect_mode
+import sys
 from ai.executor import run_model
-from ai.plugins.kubernetes import analyze_kube
 
-app = typer.Typer()
-
-@app.command()
-def run(mode: str, task: str):
-    if mode == "auto":
-        mode = detect_mode(task)
-
-    if mode == "kube":
-        print(analyze_kube(task))
+def main():
+    if len(sys.argv) < 3:
+        print("\nUsage: ai <mode> <query>\n")
+        print("Modes: devops | research | general\n")
         return
 
-    print(run_model(mode, task))
+    mode = sys.argv[1]
+    query = " ".join(sys.argv[2:])
+
+    print(f"\n⚡ Mode: {mode}")
+    print(f"🧠 Query: {query}\n")
+
+    result = run_model(mode, query)
+
+    print("\n🔥 RESULT:\n")
+    print(result)
+
 
 if __name__ == "__main__":
-    app()
+    main()
