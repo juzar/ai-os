@@ -1,62 +1,80 @@
 import time
+import threading
+from pathlib import Path
 from dotenv import dotenv_values
 from openai import OpenAI
 import anthropic
-import google.generativeai as genai
 
 # ===== LOAD ENV =====
-config = dotenv_values(".env")
+config = dotenv_values(Path(__file__).resolve().parent.parent / ".env")
 
 ANTHROPIC_API_KEY = config.get("ANTHROPIC_API_KEY")
-PERPLEXITY_API_KEY = config.get("PERPLEXITY_API_KEY")
-GEMINI_API_KEY = config.get("GEMINI_API_KEY")
+OPENAI_API_KEY = config.get("OPENAI_API_KEY")
 
 # ===== MODEL CONFIG =====
-MODEL_CONFIG = {
-    "claude": {
-        "strong": "claude-3-5-sonnet-latest",
-        "fast": "claude-haiku-4-5-20251001"
-    },
-    "perplexity": {
-        "research": "llama-3.1-sonar-large-128k-online"
-    },
-    "gemini": {
-        "pro": "gemini-1.5-pro-latest"
-    }
-}
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+OPENAI_MODEL = "gpt-4o-mini"
 
-# ===== ROUTING =====
-def select_provider(mode):
+# ===== PROMPT ENGINE =====
+def get_prompt(mode):
     if mode == "devops":
-        return ["claude", "perplexity", "gemini"]
+        return """
+You are a senior DevOps engineer.
+
+- Identify root cause
+- Provide actionable fix
+- Include CLI commands (kubectl, az, aws)
+- Keep it precise
+"""
     elif mode == "research":
-        return ["perplexity", "claude", "gemini"]
+        return """
+You are a technical researcher.
+
+- Provide structured insights
+- Compare approaches
+- Focus on latest best practices
+"""
+    elif mode == "incident":
+        return """
+You are in INCIDENT RESPONSE MODE.
+
+- Diagnose quickly
+- List probable causes
+- Suggest immediate mitigation
+- Then long-term fix
+"""
     else:
-        return ["claude", "gemini"]
+        return "You are a helpful assistant."
 
 # ===== CLAUDE =====
 def call_claude(system_prompt, user_input):
+    if not ANTHROPIC_API_KEY:
+        raise Exception("Missing ANTHROPIC_API_KEY")
+
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     response = client.messages.create(
-        model=MODEL_CONFIG["claude"]["strong"],
+        model=CLAUDE_MODEL,
         max_tokens=800,
         messages=[
-            {"role": "user", "content": f"{system_prompt}\n\n{user_input}"}
+            {
+                "role": "user",
+                "content": f"{system_prompt}\n\n{user_input}"
+            }
         ]
     )
 
     return response.content[0].text
 
-# ===== PERPLEXITY =====
-def call_perplexity(system_prompt, user_input):
-    client = OpenAI(
-        api_key=PERPLEXITY_API_KEY,
-        base_url="https://api.perplexity.ai"
-    )
+# ===== OPENAI =====
+def call_openai(system_prompt, user_input):
+    if not OPENAI_API_KEY:
+        raise Exception("Missing OPENAI_API_KEY")
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
     response = client.chat.completions.create(
-        model=MODEL_CONFIG["perplexity"]["research"],
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input}
@@ -64,17 +82,6 @@ def call_perplexity(system_prompt, user_input):
     )
 
     return response.choices[0].message.content
-
-# ===== GEMINI =====
-def call_gemini(system_prompt, user_input):
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    response = client.models.generate_content(
-        model=MODEL_CONFIG["gemini"]["pro"],
-        contents=f"{system_prompt}\n\n{user_input}"
-    )
-
-    return response.text
 
 # ===== RETRY SYSTEM =====
 def retry(func, retries=2):
@@ -84,36 +91,48 @@ def retry(func, retries=2):
         except Exception as e:
             print(f"[Retry {i+1}] {e}")
             time.sleep(1)
-    raise Exception("Retries exhausted")
+    return f"[FAILED AFTER RETRIES]"
 
-# ===== EXECUTION ENGINE =====
+# ===== EXECUTION ENGINE (PARALLEL) =====
 def run_model(mode, user_input):
-    system_prompt = """
-You are a senior DevOps engineer.
+    system_prompt = get_prompt(mode)
 
-Rules:
-- Identify root cause
-- Provide actionable fix
-- Include CLI commands where possible
-- Be precise, not verbose
+    results = {}
+
+    def run_claude():
+        try:
+            results["claude"] = retry(lambda: call_claude(system_prompt, user_input))
+        except Exception as e:
+            results["claude"] = f"[ERROR] {e}"
+
+    def run_openai():
+        try:
+            results["openai"] = retry(lambda: call_openai(system_prompt, user_input))
+        except Exception as e:
+            results["openai"] = f"[ERROR] {e}"
+
+    t1 = threading.Thread(target=run_claude)
+    t2 = threading.Thread(target=run_openai)
+
+    t1.start()
+    t2.start()
+
+    t1.join()
+    t2.join()
+
+    # ===== OUTPUT FORMAT =====
+    final_output = f"""
+================ AI ANALYSIS ================
+
+PRIMARY (CLAUDE):
+{results.get("claude")}
+
+--------------------------------------------
+
+SECONDARY (CHATGPT):
+{results.get("openai")}
+
+============================================
 """
 
-    providers = select_provider(mode)
-
-    for provider in providers:
-        try:
-            print(f"[Using {provider.upper()}]")
-
-            if provider == "claude":
-                return retry(lambda: call_claude(system_prompt, user_input))
-
-            elif provider == "perplexity":
-                return retry(lambda: call_perplexity(system_prompt, user_input))
-
-            elif provider == "gemini":
-                return retry(lambda: call_gemini(system_prompt, user_input))
-
-        except Exception as e:
-            print(f"[{provider.upper()} FAILED] {e}")
-
-    return "[ALL MODELS FAILED]"
+    return final_output
