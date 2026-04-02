@@ -2,7 +2,7 @@ import time
 from dotenv import dotenv_values
 from openai import OpenAI
 import anthropic
-from google import genai
+import google.generativeai as genai
 
 # ===== LOAD ENV =====
 config = dotenv_values(".env")
