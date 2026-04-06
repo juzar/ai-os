@@ -1,181 +1,154 @@
-import time
-import threading
-from pathlib import Path
-from dotenv import dotenv_values
-from openai import OpenAI
 import anthropic
+import time
 
-from ai.memory import search_memory, save_memory, boost_memory
-from ai.agents.kubernetes import analyze_pods, debug_pod
-from ai.remediation import run_fix
-from ai.utils import extract_commands
+from ai.brain import think
+from ai.memory import search_memory, save_memory
+from ai.config import ANTHROPIC_API_KEY, MODELS, LIMITS
 
-# ===== LOAD ENV =====
-config = dotenv_values(Path(__file__).resolve().parent.parent / ".env")
+from ai.agents.github_writer import (
+    create_branch,
+    update_file,
+    create_pr,
+    get_file,
+    list_repo_files
+)
 
-ANTHROPIC_API_KEY = config.get("ANTHROPIC_API_KEY")
-OPENAI_API_KEY = config.get("OPENAI_API_KEY")
-
-CLAUDE_MODEL = "claude-haiku-4-5-20251001"
-OPENAI_MODEL = "gpt-4o-mini"
-
-# ===== PROMPTS =====
-def get_prompt(mode):
-    if mode == "devops":
-        return """
-You are a senior DevOps engineer.
-
-- Identify root cause
-- Provide actionable fix
-- Include CLI commands (kubectl, az, aws)
-- Be precise
-"""
-    elif mode == "incident":
-        return """
-You are in INCIDENT RESPONSE MODE.
-
-- Diagnose quickly
-- Provide mitigation first
-- Then root cause
-"""
-    elif mode == "infra":
-        return """
-You are a cloud engineer.
-
-- Troubleshoot infra issues
-- Focus on Azure/AWS
-"""
-    else:
-        return "You are a helpful assistant."
-
-# ===== MODEL CALLS =====
-def call_claude(prompt, user_input):
-    if not ANTHROPIC_API_KEY:
-        raise Exception("Missing ANTHROPIC_API_KEY")
-
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    response = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=600,  # 🔥 reduced tokens
-        messages=[
-            {"role": "user", "content": f"{prompt}\n\n{user_input}"}
-        ]
-    )
-
-    return response.content[0].text
+from ai.agents.diff_engine import get_local_file_map, compare_maps
 
 
-def call_openai(prompt, user_input):
-    if not OPENAI_API_KEY:
-        raise Exception("Missing OPENAI_API_KEY")
+def claude(prompt):
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
-
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user_input}
-        ],
-        max_tokens=500  # 🔥 reduced tokens
-    )
-
-    return response.choices[0].message.content
-
-
-# ===== RETRY =====
-def retry(func, retries=2):
-    for i in range(retries):
+    for model in MODELS:
         try:
-            return func()
-        except Exception as e:
-            print(f"[Retry {i+1}] {e}")
-            time.sleep(1)
-    return "[FAILED AFTER RETRIES]"
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+            res = client.messages.create(
+                model=model,
+                max_tokens=LIMITS["MODEL_MAX_TOKENS"],
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            return res.content[0].text
+
+        except Exception:
+            continue
+
+    return "[ERROR] All models failed"
 
 
-# ===== ROUTING =====
-def should_use_parallel(mode):
-    return mode in ["incident", "infra"]
+def extract_repo(user_input):
+    for w in user_input.split():
+        if "/" in w:
+            p = w.split("/")
+            if len(p) == 2 and all(p):
+                return p[0], p[1]
+    return None, None
 
 
-# ===== EXECUTION ENGINE =====
 def run_model(mode, user_input):
 
-    # ===== MEMORY CHECK =====
-    past = search_memory(user_input)
-    if past:
-        return f"⚠️ Found similar past issue:\n{past}"
+    mem = search_memory(user_input)
+    if mem:
+        print("⚠️ Memory found")
 
-    prompt = get_prompt(mode)
+    text = user_input.lower()
 
-    # ===== SMART K8S CONTEXT =====
-    if "pod" in user_input.lower() and "debug" not in user_input.lower():
-        user_input += f"\n\nFailing Pods:\n{analyze_pods()}"
+    # =====================================================
+    # 🚀 FULL MULTI-FILE SYNC
+    # =====================================================
+    if "create pr" in text or "sync repo" in text:
 
-    # ===== TARGETED POD DEBUG =====
-    if "debug pod" in user_input.lower():
+        owner, repo = extract_repo(user_input)
+
+        if not repo:
+            return "❌ Repo not detected"
+
         try:
-            pod = user_input.split()[-1]
-            user_input += f"\n\n{debug_pod(pod)}"
-        except Exception:
-            pass
+            local_map = get_local_file_map()
+            repo_files = list_repo_files(owner, repo)
 
-    results = {}
+            repo_map = {}
 
-    # ===== EXECUTION STRATEGY =====
-    if should_use_parallel(mode):
+            for f in repo_files:
+                content, _ = get_file(owner, repo, f)
+                if content:
+                    repo_map[f] = content
 
-        def run_claude():
-            results["claude"] = retry(lambda: call_claude(prompt, user_input))
+            changes = compare_maps(local_map, repo_map)
 
-        def run_openai():
-            results["openai"] = retry(lambda: call_openai(prompt, user_input))
+            if not changes:
+                return "✅ Repo already up to date"
 
-        t1 = threading.Thread(target=run_claude)
-        t2 = threading.Thread(target=run_openai)
+            branch = f"ai-sync-{int(time.time())}"
+            create_branch(owner, repo, branch)
 
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
+            new_files = []
+            modified_files = []
 
-    else:
-        results["claude"] = retry(lambda: call_claude(prompt, user_input))
-        results["openai"] = "[SKIPPED FOR TOKEN EFFICIENCY]"
+            for change in changes:
 
-    claude_output = results.get("claude", "")
-    openai_output = results.get("openai", "")
+                path = change["path"]
+                content = change["content"]
 
-    # ===== SMART COMMAND EXTRACTION =====
-    commands = extract_commands(claude_output)
+                try:
+                    _, sha = get_file(owner, repo, path)
 
-    for cmd in commands:
-        try:
-            result = run_fix(cmd)
-            print(f"\n⚡ {cmd}\n{result}")
+                    update_file(owner, repo, path, content, branch, sha)
+                    modified_files.append(path)
+
+                except:
+                    update_file(owner, repo, path, content, branch, None)
+                    new_files.append(path)
+
+            pr_url = create_pr(owner, repo, branch)
+
+            return f"""
+================ AI SYSTEM ================
+
+MODE:
+🚀 FULL REPO SYNC
+
+------------------------------------------
+
+🆕 New files:
+{chr(10).join(new_files) if new_files else "None"}
+
+✏️ Modified files:
+{chr(10).join(modified_files) if modified_files else "None"}
+
+🌿 Branch: {branch}
+🔗 PR: {pr_url}
+
+==========================================
+"""
+
         except Exception as e:
-            print(f"[Remediation Error] {e}")
+            return f"[SYNC ERROR] {e}"
 
-    # ===== MEMORY SAVE + BOOST =====
+    # =====================================================
+    # NORMAL FLOW
+    # =====================================================
+    prompt, status = think(user_input)
+
+    if prompt.startswith("RAW_OUTPUT::"):
+        return prompt.replace("RAW_OUTPUT::", "")
+
+    result = claude(prompt)
+
     save_memory({
-        "issue": user_input[:300],
-        "solution": claude_output
+        "issue": user_input,
+        "solution": result
     })
-    boost_memory(user_input)
 
-    # ===== FINAL OUTPUT =====
     return f"""
-================ AI ANALYSIS ================
+================ AI SYSTEM ================
 
-PRIMARY (CLAUDE):
-{claude_output}
+MODE:
+{status}
 
---------------------------------------------
+------------------------------------------
 
-SECONDARY (CHATGPT):
-{openai_output}
+{result}
 
-============================================
+==========================================
 """
