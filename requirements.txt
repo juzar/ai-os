@@ -1,7 +1,4 @@
-openai
 anthropic
-google-generativeai
+requests
 python-dotenv
-rich
 typer
-flask
