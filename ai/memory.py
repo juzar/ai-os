@@ -1,47 +1,58 @@
 import json
 from pathlib import Path
+import time
 
-FILE = Path("memory.json")
+DIR = Path("memory_store")
+DIR.mkdir(exist_ok=True)
+
+MAX_FILES = 100
 
 
-def load():
-    if FILE.exists():
-        return json.loads(FILE.read_text())
-    return []
+def _file():
+    return DIR / f"{int(time.time())}.json"
+
+
+def _cleanup():
+    files = sorted(DIR.glob("*.json"), key=lambda x: x.stat().st_mtime)
+
+    if len(files) > MAX_FILES:
+        for f in files[:-MAX_FILES]:
+            try:
+                f.unlink()
+            except:
+                pass
 
 
 def save_memory(entry):
-    data = load()
-
-    # 🔥 Trim large inputs (token optimization)
-    if len(entry["issue"]) > 300:
-        entry["issue"] = entry["issue"][:300]
-
-    entry["score"] = 1
-    data.append(entry)
-
-    FILE.write_text(json.dumps(data, indent=2))
+    try:
+        f = _file()
+        f.write_text(json.dumps(entry, indent=2))
+        _cleanup()
+    except:
+        pass
 
 
-def search_memory(query):
-    memory = load()
+def search_memory(query, limit=3):
+    results = []
 
-    matches = [
-        x for x in memory
-        if query.lower() in x["issue"].lower()
-    ]
+    for file in DIR.glob("*.json"):
+        try:
+            data = json.loads(file.read_text())
 
-    # 🔥 Rank by score
-    matches.sort(key=lambda x: x.get("score", 0), reverse=True)
+            score = 0
+            issue = data.get("issue", "").lower()
 
-    return matches[:3]  # top results
+            if query.lower() in issue:
+                score += 2
 
+            for w in query.split():
+                if w.lower() in issue:
+                    score += 1
 
-def boost_memory(query):
-    data = load()
+            if score > 0:
+                results.append({**data, "score": score})
 
-    for item in data:
-        if query.lower() in item["issue"].lower():
-            item["score"] = item.get("score", 1) + 1
+        except:
+            continue
 
-    FILE.write_text(json.dumps(data, indent=2))
+    return sorted(results, key=lambda x: x["score"], reverse=True)[:limit]
