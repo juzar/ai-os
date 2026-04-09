@@ -14,18 +14,14 @@ def load_memory():
         with open(MEMORY_FILE, "r") as f:
             data = json.load(f)
 
-            # 🔥 FIX: normalize all entries
             fixed = []
             now = time.time()
 
             for i, item in enumerate(data):
                 if not isinstance(item, dict):
                     continue
-
-                # 🔥 ensure timestamp exists
                 if "timestamp" not in item:
                     item["timestamp"] = now - i
-
                 fixed.append(item)
 
             return fixed
@@ -40,7 +36,6 @@ def save_memory(entry):
     entry["timestamp"] = time.time()
     data.append(entry)
 
-    # 🔥 SAFE SORT (no crash)
     data = sorted(
         data,
         key=lambda x: x.get("timestamp", 0),
@@ -53,11 +48,17 @@ def save_memory(entry):
 
 def search_memory(query):
     data = load_memory()
+    words = [w for w in query.lower().split() if len(w) > 2]
 
-    results = []
+    if not words:
+        return []
 
+    scored = []
     for item in data:
-        if query.lower() in item.get("issue", "").lower():
-            results.append(item)
+        issue = item.get("issue", "").lower()
+        score = sum(1 for w in words if w in issue)
+        if score > 0:
+            scored.append((score, item))
 
-    return results[:3]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in scored[:3]]
