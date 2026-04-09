@@ -10,10 +10,10 @@ def chat_loop():
         if user_input.lower() == "exit":
             break
 
+        history = get_messages()
         add_message("user", user_input)
 
-        # 🔥 IMPORTANT: pass ONLY user input
-        response = run_model("devops", user_input)
+        response = run_model("devops", user_input, history=history)
 
         print(f"\nAI:\n{response}\n")
 
