@@ -37,7 +37,7 @@ MODELS = [
 # ================================
 
 LIMITS = {
-    "MODEL_MAX_TOKENS": int(os.getenv("MODEL_MAX_TOKENS", 1000)),
+    "MODEL_MAX_TOKENS": int(os.getenv("MODEL_MAX_TOKENS", 4096)),
     "LOCAL_MAX_CHARS": 4000,
     "REPO_MAX_CHARS": 3000,
     "WEB_MAX_CHARS": 1500

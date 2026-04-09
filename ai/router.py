@@ -5,7 +5,7 @@ def detect_mode(user_input):
     if "github" in text or "pr" in text or "pull request" in text:
         return "github"
 
-    if "terraform" in text or "plan" in text:
+    if "terraform" in text or "terraform plan" in text:
         return "terraform"
 
     if "infra" in text or "vm" in text:

@@ -31,12 +31,21 @@ def is_blocked(path):
     return any(b in path for b in BLOCKED)
 
 
-def claude(prompt):
-
+def claude(prompt, history=None):
     errors = []
 
+    messages = []
+    if history:
+        for msg in history:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": str(content)})
+
+    messages.append({"role": "user", "content": prompt})
+
     for model in MODELS:
-        model = model.strip()  # 🔥 fix hidden whitespace
+        model = model.strip()
 
         try:
             print(f"[DEBUG] Using model: {model}")
@@ -46,7 +55,7 @@ def claude(prompt):
             res = client.messages.create(
                 model=model,
                 max_tokens=LIMITS["MODEL_MAX_TOKENS"],
-                messages=[{"role": "user", "content": prompt}]
+                messages=messages
             )
 
             return res.content[0].text
@@ -75,8 +84,7 @@ def ask_approval():
     return input().strip().lower() == "y"
 
 
-# 🔥 THIS WAS MISSING (CRITICAL)
-def run_model_core(mode, user_input):
+def run_model_core(mode, user_input, history=None):
 
     mem = search_memory(user_input)
     if mem:
@@ -105,8 +113,6 @@ def run_model_core(mode, user_input):
                     repo_map[f] = content
 
             changes = compare_maps(local_map, repo_map)
-
-            # 🔥 filter blocked
             changes = [c for c in changes if not is_blocked(c["path"])]
 
             if not changes:
@@ -179,7 +185,7 @@ PR: {pr_url}
     if prompt.startswith("RAW_OUTPUT::"):
         return prompt.replace("RAW_OUTPUT::", "")
 
-    result = claude(prompt)
+    result = claude(prompt, history=history)
 
     save_memory({
         "issue": user_input,
