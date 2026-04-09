@@ -1,0 +1,7 @@
+.env
+memory.json
+session.json
+sessions/
+memory_store/
+__pycache__/
+*.log

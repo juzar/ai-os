@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/c/Users/juzar.ali/Desktop/ai-os-v6/code-review-graph/**)",
+      "Bash(pip install:*)",
+      "Bash(python3.10:*)",
+      "Bash(uv:*)",
+      "Bash(apt list --installed)",
+      "Read(//usr/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(sudo apt-get:*)",
+      "Bash(curl:*)",
+      "Bash(export:*)",
+      "Bash(/mnt/c/Users/juzar.ali/Desktop/ai-os-v6/code-review-graph/.venv/bin/code-review-graph install:*)",
+      "Bash(/mnt/c/Users/juzar.ali/Desktop/ai-os-v6/code-review-graph/.venv/bin/code-review-graph build:*)"
+    ]
+  }
+}
